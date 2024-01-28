@@ -1,0 +1,704 @@
+---
+title: "EM Assignments Part 1 and Part 2"
+subtitle: "Replicating Statistics for Return Skewness"
+author: "Zhabin Mikhail"
+output: 
+  pdf_document:
+    toc: yes
+    number_sections: yes
+  html_document:
+    toc: yes
+    number_sections: yes
+    toc_float:
+      collapsed: no
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+#runtime: shiny_prerendered
+bibliography: assignment.bib  
+---
+
+# Assignment Preparation
+
+In this tutorial we use the following packages:
+
+```{r}
+#All necessary packages
+install.packages("bibtex")
+install.packages("float")
+library(lubridate)
+library(RSQLite)
+library(dbplyr)
+library(tidyverse)
+library(scales)
+library(lmtest)
+library(sandwich)
+library(ggplot2)
+library(furrr)
+library(bibtex)
+library(knitr)
+library(tidyr)
+library(broom)
+library(zoo)
+library(rmarkdown)
+library(tidyverse)
+library(ggplot2)
+library(float)
+db_path <- "/home/shared/data/tidy_finance.sqlite"
+```
+\pagenumbering{gobble}
+\newpage
+\section*{Abstract}
+This study investigates the impact of the Return Skewness factor on asset pricing, examining the robustness of Jegadeesh and Titman's 1993 findings and replicating the analysis with open-source data from Chen and Zimmerann. The primary objective is to critically evaluate the reliability of the Return Skewness effect, its dependence on market dynamics, and the feasibility of replicating original study results. Employing a comprehensive database and statistical procedures, the research involves meticulous imputation of missing data and thorough robustness checks. Despite these efforts, replicating the significant results of the original study proves challenging, hinting at either a context-dependent Return Skewness effect or limitations in the data foundation. This challenges conventional assumptions of the CAPM model, highlighting the necessity for ongoing research to comprehend market inefficiencies and pricing anomalies. The paper concludes by urging future investigations into the variability of the Return Skewness effect, its occurrence under different conditions, and a critical assessment of prior studies for reliable replication of research findings.
+
+#Keywords
+Asset pricing, Return Skewness, Market Volatility, Robustness Check, Contex DEpendence Effects, Research Replication
+
+\newpage
+\pagenumbering{arabic}
+
+# Introduction
+In the context of academic finance, Andrew Y. Chen and Tom Zimmermann address the challenges surrounding cross-sectional asset pricing by introducing an open collaboration approach through an "open source dataset." Their work responds to skepticism about the credibility of existing literature, emphasizing the prevalence of p-hacking and irreproducibility issues in the field. The authors present a dataset that achieves nearly 100% reproducibility of predictability results, inviting others to engage in extensive replication using their user-friendly and modular code.
+
+Notably, Chen and Zimmermann focus on the meticulous examination of 319 firm-level characteristics, with a particular emphasis on the return skewness factor. The dataset sheds light on the varied predictability evidence of characteristics, showcasing nuances in the reproducibility of each. By hand-collecting key details from original papers, including tables, empirical tests, predictability signs, and t-stats, the authors ensure transparency and facilitate a deeper understanding of the characteristics.
+
+Through their work, Chen and Zimmermann set a precedent for transparent collaboration in academic finance. Their commitment to reproducibility, detailed examination of characteristics, and encouragement for others to scrutinize and replicate findings underscore the importance of open collaboration in elevating the credibility of research, particularly in the context of the return skewness factor.
+
+Hence, the central aim of this investigation is to replicate the findings related to the return skewness factor using the open source dataset introduced by Chen and Zimmermann. The objective is to ascertain whether comparable results can be achieved in their dataset, validating the reproducibility of the original research. This endeavor involves a thorough scrutiny, encompassing various robustness checks, and additional analyses integrating the CAPM model and Fama-MacBeth regression.
+
+#Methodology
+In this study, the primary objective is to replicate and scrutinize the findings of Jegadeesh and Titman (1993), specifically focusing on the return skewness factor as a predictor of stock returns. The methodology closely follows the original study by Jegadeesh and Titman, utilizing data from the Center for Research in Security Prices (CRSP) for U.S. stock returns and market capitalization. The return skewness characteristics are sourced from Chen and Zimmermann's open-source dataset (Chen and Zimmermann 2021, Open Source Cross-Sectional Asset Pricing), covering the period from 1963 to 2012. The top decile represents stocks with lower return skewness (winners), while the bottom decile includes stocks with higher return skewness (losers). Long-short portfolios are then created, and their performance is statistically evaluated. Robustness checks are implemented by varying the number of breakpoints, using both value and equal-weighting approaches, and estimating Fama-MacBeth regression coefficients. The code developed by Voigt et al. (2023) is adapted for this research, ensuring a reliable and replicable process. The dataset spans from 1963 to 2012, extending the end-date to cover the specified period. The methodology involves evaluating the performance of the return skewness predictor by calculating mean returns and t-statistics, conducting a risk-adjusted return analysis using the CAPM model, and exploring the consistency of results through various portfolio configurations. Missing data is addressed through imputation techniques, replacing absent observations with mean and median values to enhance robustness. Additionally, an assessment of the annualized premium of double-sorted portfolios against size is conducted, providing insights into the risk-return profiles and strategic applicability of the return skewness factor. Finally, a Fama-MacBeth regression is employed to dissect risk premiums associated with different factors, specifically focusing on the unique contribution of the return skewness predictor to stock returns. This comprehensive and systematic methodology ensures a rigorous examination of the return skewness factor's predictive power, contributing valuable insights to asset pricing models and market dynamics.
+
+```{r}
+#Initial data preparation for crsp_monthly
+crsp_monthly <- crsp_monthly |>
++     select(
++         permno, gvkey, month, ret_excess, ret,
++         mktcap, mktcap_lag, exchange
++) |>
++     drop_na()
+#Merge signals with CRSP monthly data
+crsp_monthly_signal <- crsp_monthly |> mutate(yyyymm=year(month)*100+month(month)) |>
++     left_join(signals,by=c("permno","yyyymm")) |>
++ #Set filter according to the sample of my signal return_skew 
++ filter(yyyymm >= 196301 & yyyymm <= 201212)
+# Load the factors_ff_monthly table from the tidy_finance database 
+# and collect it into a data frame for further analysis
+factors_ff_monthly <- tbl(tidy_finance, "factors_ff_monthly") |>
++     collect() 
+```
+
+
+# Results and interpretation of assignment part 1 
+## Performance of the Return skewness predictor
+
+```{r}
+# Assigning the portfolios for customer_momentum
+customer_momentum_portfolios <- crsp_monthly_signal |> drop_na() |>
++     group_by(month) |>
++     mutate(
++         portfolio = assign_portfolio(
++             data = cur_data(),
++             sorting_variable = customer_momentum,
++             n_portfolios = 10),
++         portfolio = as.factor(portfolio)) |>
++     group_by(portfolio, month) |>
++     summarize(
++         ret_excess = weighted.mean(ret_excess, mktcap_lag),
++         .groups = "drop")> 
+# Summary statistics for each customer_momentum portfolio
+customer_momentum_portfolios_summary <- customer_momentum_portfolios |>
++     nest(data = c(month, ret_excess)) |> mutate(estimates = map
++         data, ~ tidy(lm(ret_excess ~ 1, data = .x))
++     )) |>
++     unnest(estimates) |> 
++     select(portfolio, term, estimate) |> 
++     pivot_wider(names_from = term, values_from = estimate) |> 
++     rename(alpha = `(Intercept)`) |> 
++     left_join(
++         customer_momentum_portfolios |> 
++             group_by(portfolio) |> 
++             summarize(ret_excess = mean(ret_excess),
++                       .groups = "drop"), join_by(portfolio))> 
+# Plotting CAPM alphas of customer_momentum-sorted portfolios
+customer_momentum_portfolios_summary |>
++     ggplot(aes(x = portfolio, y = alpha, fill = portfolio)) +
++     geom_bar(stat = "identity") +
++     labs(
++         title = "CAPM alphas of customer_momentum-sorted portfolios",
++         x = "Portfolio",
++         y = "CAPM alpha",
++         fill = "Portfolio") +
++     scale_y_continuous(labels = scales::percent_format()) +
++     theme(legend.position = "None")
+```
+Jegadeesh and Titman's seminal study in 1993 revealed a robust return skewness effect challenging the efficient market hypothesis, with a mean return of 0.41 and t-statistics of 5.27. However, attempts to replicate these findings yielded non-significant results, suggesting potential nuances in the return skewness effect's robustness (mean return: -10.9035, t-statistics: -23.9352). The inability to reproduce the original outcomes raises questions about the context-dependency or adaptability of the momentum effect.
+
+```{r}
+#Figure 1: CAPM alphas of return_skew-sorted portfolios
+# Step 1: Copy signals to signals2 
+signals2<-signals
+ 
+# Step 2: Convert "yyyymm" to date
+signals2$month <- ymd(paste0(signals2$yyyymm, "01"))
+# Step 3: Ensuring that "signals2" contains only unique months, removing any duplicates
+signals2 <- signals2 %>%
++     distinct(month, .keep_all = TRUE)
+# Step 4: Join data and calculate CAPM Metrics 
+return_skew_portfolios_summary <- return_skew_portfolios |>
++     left_join(signals2, by = "month") |>
++     left_join(factors_ff_monthly, by="month") |>
++     group_by(portfolio) |>
++     summarize(
++         alpha = as.numeric(lm(ret ~ 1 + return_skew)$coefficients[1]),
++         beta = as.numeric(lm(ret ~ 1 + return_skew)$coefficients[2]),
++         ret = mean(ret))
+# Step 5: Visualize CAPM Alphas 
+return_skew_portfolios_summary |>
++     ggplot(aes(x = portfolio, y = alpha, fill = portfolio)) +
++     geom_bar(stat = "identity") +
++     labs(
++         x = "Portfolio",
++         y = "CAPM alpha",
++         fill = "Portfolio") +
++     scale_y_continuous(labels = percent) +
++     theme(legend.position = "None")
+```
+
+Figure 1. In the CAPM alpha represents the excess return of an asset or portfolio beyond what would be expected based on its systematic risk as measured by beta. A positive alpha suggests outperformance, while a negative alpha indicates underperformance relative to the predicted return based on the asset's beta and the market's expected return. 
+
+As the see, there trend is descending from left to the right. This means that portfolios with high return skewness generate abnormal returns. The graph shows exactly this situation, thus the CAMP model works for return skewness predictor. 
+
+## Average portfolio excess returns and average beta estimates
+```{r}
+#Figure 2: Security Market Line and return_skew Portfolios
+# Step 1:# Perform linear regression to calculate coefficients 
+# for the Security Market Line (SML), where ret is the dependent 
+# variable and beta is the independent variable. The model includes # an intercept and a slope based on the beta of the portfolios. 
+sml_capm <- lm(ret ~ 1 + beta, data = return_skew_portfolios_summary)$coefficients
+ 
+# Step 2: Create a scatter plot with a regression line (SML)
+# The plot shows the excess return (ret) on the y-axis 
+# and the beta on the x-axis for each portfolio.
+return_skew_portfolios_summary |>
++     ggplot(aes(
++         x = beta, 
++         y = ret, 
++         color = portfolio)) +
++     geom_point() +
++     geom_abline(
++         intercept = 0,
++         slope = mean(factors_ff_monthly$mkt_excess),
++         linetype = "solid") +
++     geom_abline(
++         intercept = sml_capm[1],
++         slope = sml_capm[2],
++         linetype = "dashed") +
++     scale_y_continuous(
++         labels = percent,
++         limit = c(0, mean(factors_ff_monthly$mkt_excess) * 2)) +
++     scale_x_continuous(limits = c(-0.25, 2)) + labs(x = "Beta", y = "Excess return", color = "Portfolio")
+```
+Figure 2 displays the average excess returns and beta estimates for the portfolios, with excess returns representing returns above the risk-free rate. The x-axis shows portfolio beta, indicating volatility relative to the market. Portfolios cluster on the left with betas close to zero, displaying slightly varied excess returns. The solid black line, likely the Security Market Line (SML) per CAPM, suggests higher beta corresponds to higher expected returns.
+Addiitonaly, 7 porfolios were removed as they consist of missing values. A beta equal to 0 typically implies that the asset or portfolio has no correlation with the market, indicating that its returns are not influenced by overall market movements. In other words, the asset's performance is not associated with changes in the broader market.
+
+# Assignment 2
+## Robustness assessment of different number portfolios value-weighted
+```{r}
+# Robustness and Interpretation 1
+# Test 1: Different number of value-weighted and equally-weighted portfolios
+# Test 1.1: Different number of value-weighted portfolios 
+# Step 1: Define a vector with different numbers of portfolios
+number_of_portfolios <- c(5, 10, 15, 20, 50, 100)> 
+# Step 2: Initialize vectors to store the mean returns and t-statistics for each number of portfolios
+mean_returns_value_weighted_number_of_portfolios <- c()
+t_stat_value_weighted_number_of_portfolios <- c()> 
+# Step 3:Loop over the defined number of portfolios
+for (i in 1:length(number_of_portfolios))
++     
+# Step 4: Construct a long-short portfolio by comparing the highest and lowest return_skew portfolio  
++return_skew_vw_portfolios <- crsp_monthly_signal |> drop_na()|>
++group_by(month) |>
++         mutate(
++portfolio = assign_portfolio(
++data = pick(everything()),
++var = return_skew,
++n_portfolios = number_of_portfolios[i]),
++portfolio = as.factor(portfolio)) |>
++         group_by(portfolio, month) |>
++         reframe(
++             ret = weighted.mean(ret_excess, mktcap_lag), 
++             .groups = "drop")
++     
+# Step 5: Construct a long-short portfolio by comparing the highest and lowest return_skew portfolios  
++     return_skew_vw_portfolios_longshort <- return_skew_vw_portfolios |>
++         ungroup() |>
++         mutate(portfolio = case_when(
++             portfolio == max(as.numeric(portfolio)) ~ "high",
++             portfolio == min(as.numeric(portfolio)) ~ "low"
++         )) |>
++         filter(portfolio %in% c("low", "high")) |>
++         pivot_wider(id_cols = "month", names_from = portfolio, values_from = ret) |>
++         mutate(long_short = high - low)
++     
+# Step 6: Store the mean long-short return and its t-statistic for each portfolio number
++     mean_returns_value_weighted_number_of_portfolios[i] <- mean(return_skew_vw_portfolios_longshort$long_short, na.rm = TRUE)
++     
++     t_stat_value_weighted_number_of_portfolios[i] <- coeftest(lm(long_short ~ 1, data = return_skew_vw_portfolios_longshort),
++                                                               vcov = NeweyWest)[,3]
+> 
+Table_2 <- data.frame(Portfolios = factor(number_of_portfolios), Mean.Return= mean_returns_value_weighted_number_of_portfolios*100, t.stat = t_stat_value_weighted_number_of_portfolios)
+kbl(Table_2, digits = 4, caption = "Robustness different number portfolios value-weighted") %>% 
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+Table 2. The table presents the robustness of the results for different numbers of portfolios in a value-weighted scenario. The values under "Portfolios" indicate the number of portfolios considered in the analysis. The "Mean.Return" column represents the average return of the portfolios, measured in percentage points. The "t.stat" column shows the corresponding t-statistics, which assess the statistical significance of the average returns. As the number of portfolios increases, the portfolios become more granular or finely divided. For example, moving from 5 to 100 portfolios implies a finer segmentation of stocks based on return skewness. The negative values in the "Mean.Return" column indicate that, on average, the portfolios experience negative returns. The magnitude of the negative returns tends to increase as the number of portfolios rises. This suggests that, regardless of the level of granularity in portfolio segmentation, the average returns remain negative. The t-statistics in the "t.stat" column quantify the statistical significance of the average returns. Higher absolute t-statistic values indicate greater statistical significance. In this case, the t-statistics are notably high, reflecting strong evidence against the null hypothesis that the average returns are zero. Overall, the robustness check reveals a consistent pattern of negative average returns across different portfolio configurations, and these returns are statistically significant. This suggests that the observed negative returns are likely not random fluctuations but rather indicative of a meaningful trend or effect in the data.
+
+## Robustness assessment of different number portfolios equally-weighted
+```{r}
+# Test 1.2: Different number of equally-weighted portfolios 
+# Step 1: Define a vector with different numbers of portfolios
+> number_of_portfolios <- c(5, 10, 15, 20, 50, 100)
+> 
+# Step 2: Initialize vectors to store the mean returns and t-statistics for each number of portfolios
+mean_returns_equally_weighted_number_of_portfolios <- c()
+t_stat_equally_weighted_number_of_portfolios <- c()
+> 
+#Step 3:Loop over the defined number of portfolios
+for (i in 1:length(number_of_portfolios)) {
++     
+# Step 4: Construct a long-short portfolio by comparing the highest and lowest return_skew portfolio  
++     return_skew_eq_portfolios <- crsp_monthly_signal |> drop_na()|>
++         group_by(month) |>
++         mutate(
++             portfolio = assign_portfolio(
++                 data = pick(everything()),
++                 var = return_skew,
++                 n_portfolios = number_of_portfolios[i]),
++             portfolio = as.factor(portfolio)) |>
++         group_by(portfolio, month) |>
++         reframe(
++             ret = weighted.mean(ret_excess), 
++             .groups = "drop")
++     
++     # Step 5: Construct a long-short portfolio by comparing the highest and lowest return_skew portfolios  
++     return_skew_eq_portfolios_longshort <- return_skew_eq_portfolios |>
++         ungroup() |>
++         mutate(portfolio = case_when(
++             portfolio == max(as.numeric(portfolio)) ~ "high",
++             portfolio == min(as.numeric(portfolio)) ~ "low"
++         )) |>
++         filter(portfolio %in% c("low", "high")) |>
++         pivot_wider(id_cols = "month", names_from = portfolio, values_from = ret) |>
++         mutate(long_short = high - low)
++     
++     # Step 6: Store the mean long-short return and its t-statistic for each portfolio number
++     mean_returns_equally_weighted_number_of_portfolios[i] <- mean(return_skew_eq_portfolios_longshort$long_short, na.rm = TRUE)
++     
++     t_stat_equally_weighted_number_of_portfolios[i] <- coeftest(lm(long_short ~ 1, data = return_skew_eq_portfolios_longshort), vcov = NeweyWest)[,3]}
+> 
+Table_3 <- data.frame(Portfolios = factor(number_of_portfolios), Mean.Return= mean_returns_equally_weighted_number_of_portfolios*100, t.stat = t_stat_equally_weighted_number_of_portfolios)
+> 
+kbl(Table_3, digits = 4, caption = "Robustness different number portfolios equally-weighted") %>%
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+Table 3 illustrates the robustness of the results for different numbers of portfolios in an equally-weighted scenario. Similar to the previous explanation, the "Portfolios" column denotes the number of portfolios considered in the analysis. Increasing the number of portfolios implies a finer segmentation of stocks based on return skewness. The negative values in the "Mean.Return" column represent the average returns of the portfolios, measured in percentage points. As the number of portfolios increases, the average returns remain consistently negative. This implies that, regardless of the level of granularity in portfolio segmentation, the portfolios tend to yield negative returns on average. The "t.stat" column displays the corresponding t-statistics, indicating the statistical significance of the average returns. Higher absolute t-statistic values suggest greater statistical significance. In this case, the t-statistics remain relatively high across different portfolio configurations, indicating strong evidence against the null hypothesis of zero average returns. All in all, the robustness check for equally-weighted portfolios reveals a consistent pattern of negative average returns, and these returns are statistically significant. The findings suggest that the observed negative returns are not likely due to random chance, reinforcing the robustness of the results across various portfolio configurations in the equally-weighted scenario.
+
+# Handling missing data
+```{r}
+# Missing Data
+# Step 1: Check for missing observations in the dataset
+> missing_data_summary <- crsp_monthly_signal |>
++     group_by(month) |>
++     summarize(missing_data_count = sum(across(everything(), ~ sum(is.na(.))))) # Ensure summarization to a single count
+> 
+# Step 2: Visualize missing data over time
+ggplot(missing_data_summary, aes(x = month, y = missing_data_count)) +
++     geom_line() +
++     labs(x = "Year", y = "Number of Missing Observations")
+
+```
+Figure 3 depicts the temporal distribution of missing observations in the dataset spanning the early 1970s to approximately 1990. The x-axis delineates time, segmented into 10-year intervals, while the y-axis measures the count of missing observations, extending up to 1500 on the scale. There was a high inclined trend in missing data variables from 1975 to 1995 approximately. But afterwords the missing variables is morelikely 0 which tells us that there were no data collection problems. 
+
+The impact of missing data on analysis results is noteworthy, as the chosen methods for handling such gaps, including imputation or exclusion, can influence statistical outcomes. This effect became apparent in prior analyses, particularly when missing data was excluded while evaluating the efficacy of the Return skewness signal.
+
+## Performance of the Return skewness predictor with imputed mean and median
+```{r}
+> colnames(results) <- c("Estimate", "Std. Error", "t value", "P-value", "Mean Return")
+> # Replicating the mean_return and t-statistic of table 2 with the imputed median
+# meanStep 1: Assign portfolios based on breakpoints
+assign_portfolio <- function(data, var, n_portfolios) { 
++ # medianStep 2: Calculate breakpoints for portfolio assignment
++ breakpoints <- data |>
++     reframe(breakpoint = quantile({{ var }},
++                                   probs = seq(0, 1, length.out = n_portfolios + 1),
++                                   na.rm = TRUE)) |>
++     pull(breakpoint) |>
++     as.numeric()
++ # medianStep 3: Assign portfolios to data based on breakpoints  
++ assigned_portfolios <- data |>
++     mutate(portfolio = findInterval({{ var }},
++                                     breakpoints,
++                                     all.inside = TRUE)) |>
++     pull(portfolio)
++ 
++ return(assigned_portfolios)}
+# medianStep 4: Prepare return_skew portfolios
+return_skew_portfolios <- crsp_monthly_imputed_median |>
++     group_by(month) |>
+# medianStep 5: Assign portfolios to return_skew using the assign_portfolio function
++ mutate(
++     portfolio = assign_portfolio(
++         data = pick(everything()),
++         var = return_skew,
++         n_portfolios = 10),
++     portfolio = as.factor(portfolio)) |>
++     group_by(portfolio, month) |>
+# medianStep 6: Calculate portfolio returns as weighted mean
++ reframe(
++     ret = weighted.mean(ret_excess, mktcap_lag),
++     .groups = "drop")
+# medianStep 7: Calculate return_skew_longshort portfolios
+return_skew_longshort <- return_skew_portfolios |>
++     ungroup() |>
+# medianStep 8: Create "high" and "low" portfolios
+mutate(portfolio = case_when(
++     portfolio == max(as.numeric(portfolio)) ~ "high",
++     portfolio == min(as.numeric(portfolio)) ~ "low"
++ )) |>
+# medianStep 9: Filter for "low" and "high" portfolios
++ filter(portfolio %in% c("low", "high")) |>
++ # medianStep 10: Pivot data to wide format
++ pivot_wider(id_cols = "month", names_from = portfolio, values_from = ret) |>
++     
++     # medianStep 11: Calculate long-short portfolio returns
++     mutate(long_short = high - low)
+# medianStep 12: Calculate mean returns and t-statistic
+# medianStep 12.1: Calculate the mean return of return_skew_portfolios
+> imputed_median_mean_return <- mean (return_skew_portfolios$ret)
+# medianStep 12.2: Calculate the mean of the long-short portfolio returns (excluding missing values)
+> imputed_median_mean_return_longshort <- mean(return_skew_longshort$long_short, na.rm = TRUE)
+# medianStep 12.3: Fit a linear model to the long-short portfolio returns
+> imputed_median_mean_model_fit <- lm(long_short ~ 1, data = return_skew_longshort)
+> # medianStep 12.4: Perfrom a t-test on the model fit with Newey-West standard errors
+> imputed_median_mean_t_stat <- coeftest(model_fit, vcov = NeweyWest)
+> results <- matrix(data = c(imputed_median_mean_t_stat, imputed_median_mean_return_longshort), ncol =5, nrow=1)
+> rownames(results) <- c("(Intercept)")
+> colnames(results) <- c("Estimate", "Std. Error", "t value", "P-value", "Mean Return")
+> Table_4 <- data.frame( "Original Study" = "Jegadeesh and Titman (1993)", "Acronym" = "ReturnSkew", "Sample" = "1963-2012", "Mean Return" = 0.41, "t-Stat" = 5.27, "Original Evidence "="t=4 port-sort")
+> new_row <- data.frame( "Original Study" = "Zhabin Mikhail (2024)", "Acronym" = "ReturnSkew", "Sample" = "1963-2012", "Mean Return" = imputed_mean_mean_return_longshort*100, "t-Stat" = results[,3], "Original Evidence "="t=4 port sort")
+> Table_4 <- rbind(Table_4, new_row)
+> new_row <- data.frame( "Original Study" = "Zhabin Mikhail (2024)", "Acronym" = "ReturnSkew", "Sample" = "1963-2012", "Mean Return" = imputed_median_mean_return_longshort*100, "t-Stat" = results[,3], "Original Evidence "="t=4 sort port")
+> Table_4 <- rbind(Table_4, new_row)
+> kbl(Table_4, digits = 4, caption = "Return Skewness predictor with imputed mean and median") %>% 
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+Table 4 showcases the outcomes of the analysis conducted on the Return skewness predictor, considering the imputation of missing values through both mean and median approaches in response to the identified missing data in Figure 3. Basically we can see that the results of mean return and t-stat do not change drammatically they are pritty much the same. So, after imputing missing variables the outcome does not change at all. This lead us to the couclusion that replication the initial paper even after imputing missing variables is useless, because they do not provide statistically important results as the original research does. 
+
+# Results, robustness and interpretation of assignment part 2 
+## Annulized Premium of independent double sorts portfolios
+```{r}
+> assign_portfolios <- function(data, var, n_portfolios, exchanges) {
++     
+# Step 2: Calculate breakpoints based on the quantile distribution of a variable within specific exchanges
++     breakpoints <- data |>
++         filter(exchange %in% exchanges) |> 
++         reframe(breakpoint = quantile(
++             {{ var }},
++             probs = seq(0, 1, length.out = n_portfolios + 1),
++             na.rm = TRUE)) |>
++         pull(breakpoint) |>
++         as.numeric()
++ # Step 3: Assign stocks to portfolios based on their value relative to the breakpoints  
++ assigned_portfolios <- data |>
++     mutate(portfolio = findInterval({{ var }},
++                                     breakpoints,
++                                     all.inside = TRUE)) |>
++     pull(portfolio)
++ 
++ return(assigned_portfolios)}
+# Independent double sorts portfolios
+# Step 4: Sorts portfolios independently by month and then combines return_skew and size portfolios
+Independent_return_skew_portfolios <- crsp_monthly_signal |>  drop_na()|>
++     group_by(month) |>
++     mutate(
++         portfolio_return_skew = assign_portfolios(
++             data = pick(everything()),
++             var = return_skew,
++             n_portfolios = 5,
++             exchanges = c("NYSE")),
++         portfolio_size = assign_portfolios(
++             data = pick(everything()),
++             var = mktcap_lag,
++             n_portfolios = 5,
++             exchanges = c("NYSE")),
++         portfolio_combined = str_c(portfolio_return_skew, portfolio_size)) |>
++     group_by(month, portfolio_combined) |>
++     reframe(
++         ret = weighted.mean(ret_excess, mktcap_lag),
++         portfolio_return_skew = unique(portfolio_return_skew),
++         portfolio_size = unique(portfolio_size),
++         .groups = "drop")
+# Step 5: Calculates the value premium for independent portfolios by comparing the returns of the highest and lowest return_skew portfolios
+value_premium <- Independent_return_skew_portfolios |>
++     group_by(month, portfolio_return_skew) |>
++     summarize(ret = mean(ret), .groups = "drop_last") |>
++     summarize(value_premium = ret[portfolio_return_skew == max(portfolio_return_skew)] -
++                   ret[portfolio_return_skew == min(portfolio_return_skew)])
+> # Step 6: Calculation of Annualized premium based on the value premium for independent portfolios
+Annualized_premium_independent=mean(value_premium$value_premium * 100)
+> 
+Table_5 <- data.frame("Predictors" = "Size and Return Skewness", "Annualized Premium" = Annualized_premium_independent)
+> 
+kbl(Table_5, digits = 4, caption = "Annulized Premium of Independent double sorts portfolios") %>% 
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+The table titled "Annulized Premium of Independent double sorts portfolios" presents the annualized premium associated with independent double sorts portfolios, focusing on the "Size and Return Skewness" predictor. Return skewness measures the asymmetry of a return distribution, with positive skewness indicating a distribution skewed to the right. In the context of this analysis, the return skewness factor is employed to categorize and evaluate portfolios.
+
+Additionally, the table considers the "Size" predictor, which typically refers to the market capitalization of stocks. Portfolios are sorted based on both size and return skewness, and the annualized premium is calculated for these independent double sorts portfolios. The reported value of -9.2326 suggests a potential annualized reduction in performance for portfolios characterized by the combined factors of size and return skewness. 
+
+## Size and Return skewness predictor of independently sorted portfolios for mean return and t-statistics
+
+```{r}
+> assign_portfolios <- function(data, var, n_portfolios, exchanges) {
++     
++     # Step 2: Calculate breakpoints based on the quantile distribution of a variable within specific exchanges
++     breakpoints <- data |>
++         filter(exchange %in% exchanges) |> 
++         reframe(breakpoint = quantile(
++             {{ var }},
++             probs = seq(0, 1, length.out = n_portfolios + 1),
++             na.rm = TRUE)) |>
++         pull(breakpoint) |>
++         as.numeric()
+# Step 3: Assign stocks to portfolios based on their value relative to the breakpoints  
++ assigned_portfolios <- data |>
++     mutate(portfolio = findInterval({{ var }},
++                                     breakpoints,
++                                     all.inside = TRUE)) |>
++     pull(portfolio)
++ 
++ return(assigned_portfolios)}
+# Independent double sorts portfolios
+# Step 4: Sorts portfolios independently by month and then combines return_skew and size portfolios
+Independent_return_skew_portfolios <- crsp_monthly_signal |>  drop_na()|>
++     group_by(month) |>
++     mutate(
++         portfolio_return_skew = assign_portfolios(
++             data = pick(everything()),
++             var = return_skew,
++             n_portfolios = 5,
++             exchanges = c("NYSE")),
++         portfolio_size = assign_portfolios(
++             data = pick(everything()),
++             var = mktcap_lag,
++             n_portfolios = 5,
++             exchanges = c("NYSE")),
++         portfolio_combined = str_c(portfolio_return_skew, portfolio_size)) |>
++     group_by(month, portfolio_combined) |>
++     reframe(
++         ret = weighted.mean(ret_excess, mktcap_lag),
++         portfolio_return_skew = unique(portfolio_return_skew),
++         portfolio_size = unique(portfolio_size),
++         .groups = "drop")
+> # Step 5: Calculates the value premium for independent portfolios by comparing the returns of the highest and lowest return_skew portfolios
+value_premium <- Independent_return_skew_portfolios |>
++     group_by(month, portfolio_return_skew) |>
++     summarize(ret = mean(ret), .groups = "drop_last") |>
++     summarize(value_premium = ret[portfolio_return_skew == max(portfolio_return_skew)] -
++                   ret[portfolio_return_skew == min(portfolio_return_skew)])
+# Step 6: Calculation of Annualized premium based on the value premium for independent portfolios
+Annualized_premium_independent=mean(value_premium$value_premium * 100)
+> Table_5 <- data.frame("Predictors" = "Size and Return Skewness", "Annualized Premium" = Annualized_premium_independent)
+> kbl(Table_5, digits = 4, caption = "Annulized Premium of Independent double sorts portfolios") %>% 
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+# Step 7: Calculates the size and return_skew premiums for independent portfolios
+size_premium <- Independent_return_skew_portfolios |>
++     group_by(month, portfolio_size) |>
++     summarize(mean_ret = mean(ret)*100, .groups = "drop_last")|> 
++ summarize(size_premium = mean_ret[portfolio_size == min(portfolio_size)] -
++               mean_ret[portfolio_size == max(portfolio_size)])
+> return_skew_premium <- Independent_return_skew_portfolios |>
++     group_by(month, portfolio_return_skew) |>
++     summarize(mean_ret = mean(ret)*100, .groups = "drop_last")|> 
++ summarize(return_skew_premium = mean_ret[portfolio_return_skew == max(portfolio_return_skew)] -
++               mean_ret[portfolio_return_skew == min(portfolio_return_skew)])
+> mean_size_premium <- mean(size_premium$size_premium, na.rm = TRUE)
+> mean_return_skew_premium <- mean(return_skew_premium$return_skew_premium, na.rm = TRUE)
+> # Step 8: Conduct t-tests on the size premium to evaluate statistical significance using Newey-West standard errors
+t_test_size <- coeftest(lm(size_premium ~ 1, data = size_premium),
++                         vcov = NeweyWest)[,3]
+> t_test_return_skew <- coeftest(lm(return_skew_premium ~ 1, data = return_skew_premium),
++                          vcov = NeweyWest)[,3]
+> Table_6 <- data.frame( "Predictors" = c("Size", "Return Skewness"), "Mean" = c(mean_size_premium, mean_return_skew_premium), "t-stat" = c(t_test_size, t_test_return_skew))
+> kbl(Table_6, caption = "Size and Return Skewness Predictor of Independently Sorted Portfolios for Mean Return and t-stat", digits = 4) %>%  
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+
+The table 6 presents the results of analyzing independently sorted portfolios based on the predictors of Size and Return Skewness. For the "Size" predictor, the "Mean" column shows an average return of -0.3413, suggesting a negative mean return for portfolios sorted based on size. The corresponding "t-stat" of -2.0019 indicates statistical significance, implying that the observed negative mean return is likely not due to random chance. Concerning the "Return Skewness" predictor, the table reports a substantial negative mean return of -9.2326. This indicates a potential annualized reduction in portfolio performance associated with the combined factors of return skewness. The accompanying "t-stat" of -27.759 signifies strong statistical significance, reinforcing the reliability of the observed negative mean return.
+
+## Annulized Premium of dependent double sorts portfolios
+```{r}
+> dependent_return_skew_portfolios <- crsp_monthly_signal |> drop_na()|>
++     group_by(month) |>
++     mutate(portfolio_size = assign_portfolios(
++         data = pick(everything()),
++         var = mktcap_lag,
++         n_portfolios = 5,
++         exchanges = c("NYSE"))) |>
++ group_by(month, portfolio_size) |>
++     mutate(
++         portfolio_return_skew = assign_portfolios(
++             data = pick(everything()),
++             var = return_skew,
++             n_portfolios = 5,
++             exchanges = c("NYSE")),
++         portfolio_combined = str_c(portfolio_size, portfolio_return_skew)) |> group_by(month, portfolio_combined) |>
++     summarize(
++         ret = weighted.mean(ret_excess, mktcap_lag),
++         portfolio_size = unique(portfolio_size), portfolio_return_skew = unique(portfolio_return_skew),
++         .groups = "drop")
+> value_premium <- dependent_return_skew_portfolios |>
++     group_by(month, portfolio_return_skew) |>
++     summarize(ret = mean(ret), .groups = "drop_last") |>
++     summarize(value_premium = ret[portfolio_return_skew == max(portfolio_return_skew)] -
++                   ret[portfolio_return_skew == min(portfolio_return_skew)])
+> Annualized_premium_dependent=mean(value_premium$value_premium * 100)
+> Table_7 <- data.frame("Predictors" = "Size and Return Skewness", "Annualized Premium" = Annualized_premium_dependent)
+> 
+kbl(Table_7, digits = 4, caption = "Annulized Premium of Dependent double sorts portfolios") %>% 
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+
+```
+The table 7 presents the annualized premium for portfolios that are dependent on the predictors of "Size" and "Return Skewness." For the "Size and Return Skewness" predictor, the table reports an annualized premium of -9.1941. This suggests that portfolios sorted based on both size and return skewness exhibit a negative annualized premium. The negative value indicates a potential reduction in portfolio performance associated with the combined effects of size and return skewness.
+
+## Size and Return skewness predictor of dependently sorted portfolios for mean return and t-statistics
+```{r}
+> size_premium <- dependent_return_skew_portfolios |>
++     group_by(month, portfolio_size) |>
++     summarize(mean_ret = mean(ret)*100, .groups = "drop_last")|> 
++     
++     summarize(size_premium = mean_ret[portfolio_size == min(portfolio_size)] -
++                   mean_ret[portfolio_size == max(portfolio_size)])
+> 
+return_skew_premium <- dependent_return_skew_portfolios |>
++ group_by(month, portfolio_return_skew) |>
++     summarize(mean_ret = mean(ret)*100, .groups = "drop_last")|> 
++     
++     summarize(return_skew_premium = mean_ret[portfolio_return_skew == max(portfolio_return_skew)] -
++                   mean_ret[portfolio_return_skew == min(portfolio_return_skew)])
+> mean_size_premium <- mean(size_premium$size_premium, na.rm = TRUE)
+> mean_return_skew_premium <- mean(return_skew_premium$return_skew_premium, na.rm = TRUE)
+> t_test_size <- coeftest(lm(size_premium ~ 1, data = size_premium),
++                         vcov = NeweyWest)[,3]
+> 
+t_test_return_skew <- coeftest(lm(return_skew_premium ~ 1, data = return_skew_premium),
++                          vcov = NeweyWest)[,3]
+> Table_8 <- data.frame( "Predictors" = c("Size", "Return Skewness"), "Mean" = c(mean_size_premium, mean_return_skew_premium), "t-stat" = c(t_test_size, t_test_return_skew))
+> 
+kbl(Table_8, caption = "Size and Return Skewness Predictor of Dependently Sorted Portfolios for Mean Return and t-stat", digits = 4) %>%  
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+The table 8 presents the results of analyzing dependently sorted portfolios based on the predictors of "Size" and "Return Skewness." For the "Size" predictor, the "Mean" column shows an average return of 0.3400, suggesting a positive mean return for portfolios sorted based on size. The corresponding "t-stat" of 1.8481 indicates statistical significance, implying that the observed positive mean return is statistically different from zero. Concerning the "Return Skewness" predictor, the table reports a substantial negative mean return of -9.1941. This indicates a potential annualized reduction in portfolio performance associated with the factor of return skewness. The accompanying "t-stat" of -27.2813 signifies strong statistical significance, reinforcing the reliability of the observed negative mean return.
+
+## Fama-MacBeth regression results
+
+```{r}
+> # Fama-Mac-Beth regression
+# Data Preparation
+# Step 1: Load Compustat and Beta datasets from a tidy_finance database into R
+compustat <- tbl(tidy_finance, "compustat") |>
++     collect()
+> 
+beta <- tbl(tidy_finance, "beta") |>
++     collect()
+# Step 2: Merge Compustat and CRSP data, add Beta data, and calculate stock characteristics
+characteristics <- compustat |>
++     mutate(month = floor_date(ymd(datadate), "month")) |>
++     left_join(crsp_monthly, by = c("gvkey", "month")) |>
++     left_join(beta, by = c("permno", "month")) |>
++     transmute(gvkey,
++               bm = be / mktcap,
++               log_mktcap = log(mktcap),
++               beta = beta_monthly,
++               sorting_date = month %m+% months(6))
+# Combining Data for regression
+# Step 3: Prepare the dataset for Fama-MacBeth regression by merging characteristics with monthly signals and adjusting dates
+data_fama_macbeth <- crsp_monthly_signal |>
++     left_join(characteristics, by = c("gvkey", "month" =
++                                           "sorting_date")) |> group_by(permno) |>  
++     arrange(month) |>
++     fill(c(beta, bm, log_mktcap), .direction = "down") |>
++     ungroup() |>
++     left_join(crsp_monthly_signal |>
++                   select(permno, month, ret_excess_lead = ret) |>
++                   mutate(month = month %m-% months(1)),
++               by = c("permno", "month")) |>
++     select(permno, month, ret_excess_lead, beta, log_mktcap, bm, return_skew) |>
++     drop_na()
+# Cross-sectional Regression 
+# Step 4: Run cross-sectional regressions for each time period and extract the estimates
+risk_premiums <- data_fama_macbeth |>
++     nest(data = c(ret_excess_lead, beta, log_mktcap, bm, return_skew, permno)) |>
++     mutate(estimates = map(
++         data,
++         ~ tidy(lm(ret_excess_lead ~ beta + log_mktcap + bm + return_skew, data = .x))
++     )) |>
++     unnest(estimates)
+# Time-Series Aggregation of risk premiums
+# Step 5: Aggregate risk premium estimates over time and calculate their average and t-statistics
+price_of_risk <- risk_premiums |>
++     group_by(factor = term) |>
++     summarize(
++         risk_premium = mean(estimate) * 100,
++         t_statistic = mean(estimate) / sd(estimate) * sqrt(n()))
+# Adjusting Standard Errors using Newey-West
+# Step 6: Prepare data for Newey-West standard errors adjustment
+regressions_for_newey_west <- risk_premiums |>
++     select(month, factor = term, estimate) |>
++     nest(data = c(month, estimate)) |>
++     mutate(
++         model = map(data, ~ lm(estimate ~ 1, .)),
++         mean = map(model, tidy))
+# Step 7: Apply Newey-West standard errors and calculate t-statistics
+price_of_risk_newey_west <- regressions_for_newey_west |>
++     mutate(newey_west_se = map_dbl(model, ~ sqrt(NeweyWest(.)))) |>
++     unnest(mean) |>
++     mutate(t_statistic_newey_west = estimate / newey_west_se) |>
++     select(factor,
++            risk_premium = estimate,
++            t_statistic_newey_west)
+> # Combining Results
+# Step 8: Combine the original risk premium estimates with the Newey-West adjusted t-statistics
+nt_premium <- left_join(price_of_risk,
++                         price_of_risk_newey_west |>
++                             select(factor, t_statistic_newey_west),
++                         by = "factor")
+> Table_9 <- data.frame( "Factors" = c("Intercept", "Beta", "Book-to-Market Ratio", "Size", "Return Skewness"), "Risk Premium" = price_of_risk$risk_premium, "t-stat" = price_of_risk$t_statistic, "t-statistic Newey West"= price_of_risk_newey_west$t_statistic_newey_west)
+> 
+kbl(Table_9, caption = "Fama-MacBeth Results", digits = 4) %>%  
++     kable_styling(latex_options = c("hold_position")) %>%
++     kable_classic()
+```
+The Fama-French three-factor model, developed by Eugene Fama and Kenneth French, is a widely acknowledged framework in asset pricing, encompassing factors that influence stock returns. These factors include the Market Risk Premium (Beta), Book-to-Market Ratio (B/M), Size (SMB), and Return Skewness. 
+
+Interpreting the Fama-MacBeth results, the intercept (1.7349) signifies an excess return not explained by the factors, suggesting portfolios, on average, exhibit positive excess returns beyond the model's factors. The positive beta (0.0226) indicates a positive relationship between market risk premium and portfolio returns, although the low t-statistic suggests statistical insignificance. Conversely, the positive coefficient for Book-to-Market Ratio (0.1517) implies that firms with higher book-to-market ratios experience higher expected returns, supported by a positive and statistically significant t-statistic.
+
+The negative coefficient for Size (-0.1197) implies a negative relationship between size and expected returns, indicating that small-cap stocks may exhibit lower expected returns. This relationship is statistically significant, as evidenced by the negative t-statistic. Notably, Return Skewness (0.1635) reveals a positive association between positively skewed returns and higher expected returns, supported by a notably high and statistically significant t-statistic.
+
+In essence, these findings underscore the significance of skewness in influencing expected returns after accounting for market risk, book-to-market ratio, and size. The positive intercept suggests an overall positive average excess return, while each factor contributes differentially to portfolio performance. This nuanced understanding contributes valuable insights to the realm of asset pricing, emphasizing the intricate interplay of factors shaping stock returns.
+
+# Limitations
+This research has some important limitations. Since this work was done to replicate the results of the original work, it of course contains certain limitations. The information available to me for the study may not have been identical to the original publication. Also, I would like to point out that my research methodology was different, even though the aim was to replicate the results as closely as possible. I also aimed to replicate the results only for a single predictor, which may have also affected the final result.
+
+# Conclusion 
+The comprehensive examination undertaken in this paper offers a deep exploration of the return skewness factor in asset pricing, shedding light on the intricacies and difficulties encountered in reproducing findings from previous research. Employing sophisticated statistical techniques and leveraging an extensive database allowed for a meticulous analysis, yet the obtained results did not exhibit statistical significance consistent with the original study. This suggests that the impact of the return skewness factor may be intricately linked to contemporary market dynamics and specific contextual variables.
+
+The attempt to replicate Jegadeesh and Titman's 1993 study on return skewness effect, which initially exhibited robust results challenging the efficient market hypothesis, yielded non-significant outcomes, prompting further inquiry into the potential nuances and adaptability of the return skewness effect. the descending trend observed in Figure 1 indicates that portfolios with high return skewness generate abnormal returns, validating the applicability of the CAPM model to the return skewness predictor. portfolios with betas close to zero, indicating low correlation with the market, exhibit slightly varied excess returns, aligning with the expected relationship per the Security Market Line (SML) in the CAPM framework. Additionally, the removal of portfolios with missing values reinforces the notion that a beta equal to 0 signifies independence from overall market movements, implying no influence on the asset's returns by broader market changes. the robustness check employing equally-weighted portfolios consistently demonstrates negative average returns, supported by statistically significant t-statistics across various portfolio configurations. This suggests that the observed negative returns are unlikely to be attributed to random chance, emphasizing the robustness of the results in capturing the return skewness effect. Fama-MacBeth results highlight the intricate interplay of factors, including Market Risk Premium, Book-to-Market Ratio, Size, and Return Skewness, in influencing stock returns. The positive intercept suggests an average positive excess return, while the significance of each factor varies. Notably, Return Skewness emerges as a potent predictor, emphasizing its substantial and statistically significant impact on expected returns, contributing nuanced insights to asset pricing dynamics. All in all, further research should be conducted to try to replicate and identify whether the return skewness can be perceived as a good driver signal. 
